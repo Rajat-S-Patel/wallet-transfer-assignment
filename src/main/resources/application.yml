@@ -22,4 +22,4 @@ server:
 
 logging:
   level:
-    com.example.wallet: INFO
+    com.rajat.wallet: INFO
