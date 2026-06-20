@@ -252,8 +252,8 @@ A business failure is a first-class outcome: the transfer is persisted as `FAILE
 | Insufficient funds / currency mismatch | `422 Unprocessable Entity` | `TransferResponse` (`status: FAILED` + `failureReason`) |
 | Validation error (missing field, `amount <= 0`, scale > 2, self-transfer, malformed JSON) | `400 Bad Request` | `ErrorResponse` (with `fieldErrors`) |
 | Wallet does not exist | `404 Not Found` | `ErrorResponse` |
-| Idempotency key reused with a **different** payload, or original still `IN_PROGRESS` | `409 Conflict` | `ErrorResponse` |
-| Duplicate of a **completed** request (same key + same payload) | replay | original status + body, verbatim |
+| Idempotency key reused with a **different** payload | `409 Conflict` | `ErrorResponse` |
+| Duplicate of the **same** request (same key + same payload), after completion or concurrent | replay | original status + body, verbatim (a concurrent duplicate blocks on the unique index, then replays the winner) |
 | Unexpected server error | `500 Internal Server Error` | `ErrorResponse` |
 
 ### `GET /wallets/{id}`
@@ -369,8 +369,9 @@ The controller maps a recorded business `FAILED` outcome to `422`, and `PROCESSE
 
 A **dedicated, operation-agnostic `idempotency_records` table** (rather than a unique constraint on `transfers`) stores each key with a `request_hash`, a `status` (`IN_PROGRESS → COMPLETED`), and the **cached response** (`response_status` + `response_body`).
 
-- **First request** inserts an `IN_PROGRESS` record (`saveAndFlush`), executes the transfer, then flips it to `COMPLETED` with the cached response — all in one transaction.
+- **First request** inserts an `IN_PROGRESS` record (`saveAndFlush`), executes the transfer, then flips it to `COMPLETED` with the cached response — all in one transaction. `complete(...)` is one-way (`IN_PROGRESS → COMPLETED`), so the cached response can't be overwritten.
 - **Retry of a completed request** with the same payload **replays** the cached response verbatim (no re-execution).
+- **Concurrent duplicate** of the same request blocks on the unique index until the winner commits, then **replays** it — a committed `IN_PROGRESS` is never observable under READ COMMITTED, so there is no fast in-flight `409`.
 - **Same key, different payload** → `409` (the `request_hash` guards against accidental key reuse).
 - Durable, so it survives process restarts.
 

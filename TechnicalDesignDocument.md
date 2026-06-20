@@ -98,8 +98,8 @@ Response codes:
 | `422 Unprocessable Entity` | business failure recorded as `FAILED` (e.g. insufficient funds, currency mismatch) — body carries `status: FAILED` + `failureReason` |
 | `400 Bad Request` | validation error (missing field, `amount <= 0`, same wallet) |
 | `404 Not Found` | wallet does not exist |
-| `409 Conflict` | idempotency key reused with a **different** payload, **or** an identical request is still `IN_PROGRESS` (retry shortly) |
-| **replay** | duplicate of a **completed** request returns the **original** status code and body verbatim |
+| `409 Conflict` | idempotency key reused with a **different** payload |
+| **replay** | a duplicate of the **same** request — arriving after completion *or* concurrently — returns the **original** status code and body verbatim. A concurrent duplicate blocks on the unique index until the winner commits, then replays it (it does **not** get a fast in-flight `409`) |
 
 ### `GET /wallets/{id}` — balance
 
@@ -159,13 +159,13 @@ Migrations: `V1__init.sql` (wallets, transfers, ledger_entries), `V2__create_ide
 | Currency mismatch (assumption: no FX) | compare wallet currencies | transfer `FAILED` + `422` |
 | Concurrent debit of same wallet | `SELECT … FOR UPDATE` serializes | no double-spend; second waits then re-checks funds |
 | Duplicate request (same key, same payload, completed) | unique key / lookup | replay cached response |
-| Duplicate request still in flight | record is `IN_PROGRESS` | `409`, client retries |
+| Concurrent identical duplicate (still in flight) | blocks on the unique index until the winner commits | replays the winner's response (a committed `IN_PROGRESS` is never visible under READ COMMITTED, so there is no fast in-flight `409`) |
 | Key reused with different payload | `request_hash` mismatch | `409` |
 | Unique-violation race (two firsts insert same key) | `idempotency_records_key_unique` constraint | loser caught, treated as duplicate (replay) |
 | Other integrity violation (FK / CHECK / NOT NULL) | constraint name ≠ idempotency-key | rethrown, logged → `500` (never misread as a duplicate `409`) |
 | Process crash mid-transaction | transaction never commits | full rollback; no partial money movement |
 
-**Defense in depth:** invariants are enforced both in the domain (`Wallet.debit` throws if it would go negative; `Transfer.markProcessed/markFailed` only allow transitions out of `PENDING`) **and** at the database (`CHECK`/`UNIQUE`/`FK` constraints), so a logic bug cannot corrupt persisted state. Entities expose **getters only** (no `@Setter`), so the only way to mutate state is through these guarded domain methods — there is no setter that could bypass them (JPA uses field access, so setters are unnecessary).
+**Defense in depth:** invariants are enforced both in the domain (`Wallet.debit` throws if it would go negative; `Transfer.markProcessed/markFailed` only allow transitions out of `PENDING`; `IdempotencyRecord.complete` is one-way `IN_PROGRESS → COMPLETED`, so a cached response can never be overwritten) **and** at the database (`CHECK`/`UNIQUE`/`FK` constraints), so a logic bug cannot corrupt persisted state. Entities expose **getters only** (no `@Setter`), so the only way to mutate state is through these guarded domain methods — there is no setter that could bypass them (JPA uses field access, so setters are unnecessary).
 
 ---
 
@@ -179,10 +179,11 @@ Algorithm (inside the transfer transaction):
 
 1. Compute `request_hash`. `INSERT` an `IN_PROGRESS` record keyed by `idempotencyKey`.
 2. **Insert succeeds** → first occurrence → execute the transfer, then `complete(targetId, status, body)` to flip the record to `COMPLETED` and cache the response.
-3. **Insert hits the unique violation** → duplicate → load the existing record:
-   - `COMPLETED` + matching `request_hash` → **replay** cached `response_status`/`response_body`.
+3. **Insert hits the unique violation** → duplicate. The loser **blocks on the unique index** until the winner's transaction commits, then loads the (now `COMPLETED`) record:
+   - matching `request_hash` → **replay** cached `response_status`/`response_body`.
    - `request_hash` mismatch → `409` (key reused for a different request).
-   - still `IN_PROGRESS` → `409` (original in flight; retry).
+
+> Because reservation and completion happen in **one** transaction, a committed record is always already `COMPLETED` — under READ COMMITTED another request can never observe a committed `IN_PROGRESS`. So a concurrent duplicate always ends in a replay, never a fast in-flight `409`. The `IN_PROGRESS → 409` check in code is a deliberate **defensive guard** that only becomes reachable if the reservation is later moved into its own committed transaction (e.g. a `REQUIRES_NEW` reservation).
 
 This gives **exactly-once side effects** (duplicate never produces a second transfer/ledger pair) and **return-the-original-result** semantics, both safe across process restarts because the registry is durable.
 

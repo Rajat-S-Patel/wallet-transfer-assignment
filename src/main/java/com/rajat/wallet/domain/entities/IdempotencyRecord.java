@@ -63,8 +63,20 @@ public class IdempotencyRecord extends AuditableEntity {
     return r;
   }
 
-  /** Captures the created resource and final response, marking the record replayable. */
+  /**
+   * Captures the created resource and final response, marking the record replayable. One-way: a
+   * record may only complete <em>out of</em> {@link IdempotencyStatus#IN_PROGRESS}, so a stray
+   * second call can never overwrite the cached response that backs exactly-once replay.
+   */
   public void complete(UUID targetId, int responseStatus, String responseBody) {
+    if (status != IdempotencyStatus.IN_PROGRESS) {
+      throw new IllegalStateException(
+          "Idempotency record "
+              + idempotencyKey
+              + " is "
+              + status
+              + "; only an IN_PROGRESS record may complete");
+    }
     this.status = IdempotencyStatus.COMPLETED;
     this.targetId = targetId;
     this.responseStatus = responseStatus;

@@ -57,7 +57,7 @@ All entities extend `BaseEntity` (UUID v7 id) → `AuditableEntity` (`created_at
 Two read-only endpoints sit alongside the write path, served by a separate `WalletService` / `WalletController` so the command and query sides stay cleanly separated:
 
 - **`GET /wallets/{id}`** — returns the **materialized** balance directly (`findById`), so a balance read is O(1) and never aggregates the ledger. The `updatedAt` audit column doubles as a freshness signal (timestamp of the last balance-changing transaction).
-- **`GET /wallets/{id}/transfers`** — **paginated** transfer history for a wallet (source *or* destination) via `findByWalletId(walletId, Pageable)`. Paging/sorting come from a `Pageable` (default `size=20`, `sort=createdAt,id desc`); the `id` tiebreaker — a time-ordered UUID v7 — keeps paging deterministic when `createdAt` values collide. It first checks `existsById` so an unknown wallet is a clean `404` rather than an empty page. The result is mapped to an explicit `PageResponse` envelope rather than returning Spring Data's `Page` directly, whose JSON shape is version-unstable.
+- **`GET /wallets/{id}/transfers`** — **paginated** transfer history for a wallet (source *or* destination) via `findByWalletId(walletId, Pageable)`. Paging/sorting come from a `Pageable` (default `size=20`, `sort=createdAt,id desc`); the `id` tiebreaker — a time-ordered UUID v7 — keeps paging deterministic when `createdAt` values collide. To avoid a redundant round-trip, it queries the page **first** and only runs `existsById` when the page is empty — so a wallet with history skips the existence check entirely, while an empty result still distinguishes "no transfers yet" (`200`, empty) from "wallet missing" (`404`). The result is mapped to an explicit `PageResponse` envelope rather than returning Spring Data's `Page` directly, whose JSON shape is version-unstable.
 
 Both run in a `@Transactional(readOnly = true)` boundary, mapping entities to DTOs while the session is open (`open-in-view` is disabled). A malformed UUID in the path is mapped to `400` (`MethodArgumentTypeMismatchException`) rather than leaking a `500`.
 
@@ -108,6 +108,8 @@ Reasons:
 The `flush` forces the `INSERT` to the database immediately, *before* any money moves. Combined with `UNIQUE (idempotency_key)`, this means a concurrent duplicate **blocks on the index** at its own insert and never reaches the money-moving code. When the winner commits, the loser fails with a unique violation that the orchestrator converts to a replay. The reservation is part of the same transaction, so if the transfer rolls back, the key is released too — **no orphaned `IN_PROGRESS` rows** from a crash mid-flight.
 
 **Trade-off:** a duplicate that arrives *during* the winner's transaction waits for it to commit (latency = winner's remaining work) instead of failing fast. That's the correct behavior for exactly-once.
+
+A consequence worth calling out: because reservation and completion are in the **same** transaction, a committed record is always already `COMPLETED`, so under READ COMMITTED no other request can ever observe a committed `IN_PROGRESS`. Concurrent duplicates therefore always end in a **replay**, never a fast in-flight `409`. The `IN_PROGRESS → 409` branch in `replayOrConflict` is a deliberate defensive guard that only becomes reachable if the reservation is moved into its own committed transaction (`REQUIRES_NEW`). The contract and tests reflect the blocking-then-replay behavior.
 
 ### 2.5 Business failure as a recorded outcome (`422`), not an exception
 

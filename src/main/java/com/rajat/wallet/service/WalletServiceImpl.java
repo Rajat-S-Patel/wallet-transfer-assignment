@@ -1,5 +1,6 @@
 package com.rajat.wallet.service;
 
+import com.rajat.wallet.domain.entities.Transfer;
 import com.rajat.wallet.domain.entities.Wallet;
 import com.rajat.wallet.dto.TransferResponse;
 import com.rajat.wallet.dto.WalletResponse;
@@ -37,9 +38,12 @@ public class WalletServiceImpl implements WalletService {
   @Override
   @Transactional(readOnly = true)
   public Page<TransferResponse> getTransferHistory(UUID walletId, Pageable pageable) {
-    if (!walletRepository.existsById(walletId)) {
+    Page<Transfer> page = transferRepository.findByWalletId(walletId, pageable);
+    // Fetch first; only pay for the existence check when the page is empty, to tell a wallet with
+    // no transfers (200, empty) apart from a wallet that doesn't exist (404).
+    if (page.isEmpty() && !walletRepository.existsById(walletId)) {
       throw new WalletNotFoundException(walletId);
     }
-    return transferRepository.findByWalletId(walletId, pageable).map(TransferResponse::from);
+    return page.map(TransferResponse::from);
   }
 }

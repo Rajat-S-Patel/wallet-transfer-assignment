@@ -72,6 +72,11 @@ public class TransferServiceImpl implements TransferService {
   }
 
   private TransferResponse replayOrConflict(IdempotencyRecord record, String requestHash) {
+    // Defensive guard. With the current strategy (reservation + completion in one transaction) a
+    // committed record is always already COMPLETED, so under READ COMMITTED no other request can
+    // observe a committed IN_PROGRESS — concurrent duplicates block on the unique index and then
+    // replay the winner. This branch only becomes reachable if the reservation is ever moved to its
+    // own committed transaction.
     if (record.getStatus() == IdempotencyStatus.IN_PROGRESS) {
       throw new IdempotencyConflictException(
           "A request with idempotency key '"

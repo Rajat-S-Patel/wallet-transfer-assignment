@@ -74,20 +74,14 @@ class ConcurrencyIT extends AbstractIntegrationTest {
     assertThat(balanceOf(source)).isEqualByComparingTo("70.00");
     assertThat(balanceOf(dest)).isEqualByComparingTo("30.00");
 
-    // Every caller gets a coherent answer: either the replayed success (one shared transfer id)
-    // or a 409 telling them to retry. Nobody triggers a second transfer.
-    List<UUID> successfulTransferIds =
-        responses.stream()
-            .filter(r -> r.getStatusCode() == HttpStatus.CREATED)
-            .map(r -> r.getBody().transferId())
-            .distinct()
-            .toList();
-    assertThat(successfulTransferIds).hasSize(1);
+    // Every concurrent duplicate blocks on the unique index and then replays the winner, so they
+    // all return 201 with the same transfer id — no caller observes a committed IN_PROGRESS and
+    // gets a fast 409 under this reservation strategy.
     assertThat(responses)
-        .allMatch(
-            r ->
-                r.getStatusCode() == HttpStatus.CREATED
-                    || r.getStatusCode() == HttpStatus.CONFLICT);
+        .allSatisfy(r -> assertThat(r.getStatusCode()).isEqualTo(HttpStatus.CREATED));
+    List<UUID> transferIds =
+        responses.stream().map(r -> r.getBody().transferId()).distinct().toList();
+    assertThat(transferIds).hasSize(1);
   }
 
   /** Fires {@code count} tasks as simultaneously as possible and returns their results in order. */
