@@ -211,7 +211,7 @@ This gives **exactly-once side effects** (duplicate never produces a second tran
 
 - **Structured logging** keyed by `idempotencyKey` and `transferId` for the lifecycle: request received → key reserved / duplicate-replayed → transfer PROCESSED/FAILED → committed. Log level for `com.rajat.wallet` is `INFO`.
 - **Metrics** (when added): transfer count by terminal status, transfer latency, lock-wait time, duplicate-replay rate, insufficient-funds rate.
-- **Health/readiness**: Spring Actuator; Flyway migration state visible at startup (`Successfully applied N migrations`).
+- **Health/readiness** (when added): Spring Actuator health/readiness probes. Today, Flyway migration state is visible at startup (`Successfully applied N migrations`).
 - **Auditability**: append-only `ledger_entries` + `balance_after` snapshots + `created_at`/`updated_at` on every row provide a full reconstructable history.
 - Tracing (correlation id propagation) is a nice-to-have, not required.
 
