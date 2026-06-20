@@ -73,7 +73,7 @@ Request body:
 | `idempotencyKey` | string | required, non-blank; client-generated, unique per logical request |
 | `fromWalletId` | UUID | required, must exist |
 | `toWalletId` | UUID | required, must exist, `!= fromWalletId` |
-| `amount` | decimal | required, `> 0`, scale ≤ 4 |
+| `amount` | decimal | required, `> 0`, scale ≤ 2 |
 
 > Note: wallet ids are **UUIDs** (the assignment's `wallet_1` examples are illustrative). All ids are server-assigned UUID **v7** (time-ordered).
 
@@ -114,7 +114,7 @@ All entities extend `BaseEntity` (UUID **v7** primary key, assigned by Hibernate
 
 | Table | Purpose | Key columns / constraints |
 |---|---|---|
-| `wallets` | materialized balance | `balance NUMERIC(19,4)` , `currency`, `CHECK balance >= 0` |
+| `wallets` | materialized balance | `balance NUMERIC(19,2)` , `currency`, `CHECK balance >= 0` |
 | `transfers` | request + lifecycle | `from_wallet_id`, `to_wallet_id` (FK→wallets), `amount`, `status`, `failure_reason`; `CHECK amount > 0`, `CHECK from <> to`, `CHECK status IN (...)` |
 | `ledger_entries` | append-only double-entry | `wallet_id`, `transfer_id` (FKs), `type` (DEBIT/CREDIT), `amount`, `balance_after`; immutable |
 | `idempotency_records` | generic exactly-once registry | `idempotency_key UNIQUE`, `request_hash`, `status`, `target_id`, `response_status`, `response_body` |

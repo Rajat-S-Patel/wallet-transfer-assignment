@@ -1,0 +1,80 @@
+package com.rajat.wallet.exception.handler;
+
+import com.rajat.wallet.dto.ErrorResponse;
+import com.rajat.wallet.exception.IdempotencyConflictException;
+import com.rajat.wallet.exception.WalletNotFoundException;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+/** Translates domain/transport exceptions into the uniform {@link ErrorResponse} + HTTP status. */
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+  private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+  /** Bean-validation failures on the request body (incl. the self-transfer check) -> 400. */
+  @ExceptionHandler(MethodArgumentNotValidException.class)
+  public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
+    Map<String, String> fieldErrors = new LinkedHashMap<>();
+    ex.getBindingResult()
+        .getFieldErrors()
+        .forEach(fe -> fieldErrors.putIfAbsent(fe.getField(), fe.getDefaultMessage()));
+    ex.getBindingResult()
+        .getGlobalErrors()
+        .forEach(ge -> fieldErrors.putIfAbsent(ge.getObjectName(), ge.getDefaultMessage()));
+    return build(HttpStatus.BAD_REQUEST, "Validation failed", fieldErrors);
+  }
+
+  /** Unparseable / missing JSON body -> 400. */
+  @ExceptionHandler(HttpMessageNotReadableException.class)
+  public ResponseEntity<ErrorResponse> handleUnreadable(HttpMessageNotReadableException ex) {
+    return build(HttpStatus.BAD_REQUEST, "Malformed request body", null);
+  }
+
+  @ExceptionHandler(WalletNotFoundException.class)
+  public ResponseEntity<ErrorResponse> handleWalletNotFound(WalletNotFoundException ex) {
+    return build(HttpStatus.NOT_FOUND, ex.getMessage(), null);
+  }
+
+  @ExceptionHandler(IdempotencyConflictException.class)
+  public ResponseEntity<ErrorResponse> handleConflict(IdempotencyConflictException ex) {
+    return build(HttpStatus.CONFLICT, ex.getMessage(), null);
+  }
+
+  /**
+   * A concurrent first request with the same idempotency key loses the unique-index race. The
+   * transaction rolls back (no double-apply); the client should retry and will get the replay.
+   */
+  @ExceptionHandler(DataIntegrityViolationException.class)
+  public ResponseEntity<ErrorResponse> handleDataIntegrity(DataIntegrityViolationException ex) {
+    return build(HttpStatus.CONFLICT, "Concurrent duplicate request; please retry", null);
+  }
+
+  /** Defensive guard for stray illegal arguments not caught by bean validation -> 400. */
+  @ExceptionHandler(IllegalArgumentException.class)
+  public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex) {
+    return build(HttpStatus.BAD_REQUEST, ex.getMessage(), null);
+  }
+
+  @ExceptionHandler(Exception.class)
+  public ResponseEntity<ErrorResponse> handleUnexpected(Exception ex) {
+    log.error("Unhandled exception", ex);
+    return build(HttpStatus.INTERNAL_SERVER_ERROR, "Unexpected error", null);
+  }
+
+  private ResponseEntity<ErrorResponse> build(
+      HttpStatus status, String message, Map<String, String> fieldErrors) {
+    ErrorResponse body =
+        ErrorResponse.of(status.value(), status.getReasonPhrase(), message, fieldErrors);
+    return ResponseEntity.status(status).body(body);
+  }
+}
