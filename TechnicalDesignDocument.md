@@ -11,10 +11,9 @@
 | **Stack** | Java 21, Spring Boot 3.3.4, Spring Data JPA / Hibernate 6.5, PostgreSQL, Flyway |
 | **In scope** | `POST /transfers` with exactly-once semantics, double-entry ledger, balance tracking, safe concurrency |
 | **Out of scope (optional)** | balance API, transfer-history API, metrics dashboards, async workflows |
-| **Built so far** | Schema (Flyway `V1`, `V2`), domain entities (`Wallet`, `Transfer`, `LedgerEntry`, `IdempotencyRecord`), base classes (`BaseEntity`, `AuditableEntity`) |
-| **Not yet built** | Repository, service, handler layers; tests |
+| **Built** | Schema (Flyway `V1`, `V2`, `V3`), domain entities (`Wallet`, `Transfer`, `LedgerEntry`, `IdempotencyRecord`), base classes (`BaseEntity`, `AuditableEntity`), repository / service / controller layers, exception handling, and the full test suite (domain unit + Testcontainers integration, idempotency, concurrency) |
 
-**Preferred order of work** (where we are): ✅ inspect contract (`ASSIGNMENT.md`) → ✅ design note (this doc) → ⏳ implement code → ⏳ add tests → ⏳ verify observability/operational concerns.
+**Preferred order of work** (complete): ✅ inspect contract (`ASSIGNMENT.md`) → ✅ design note (this doc) → ✅ implement code → ✅ add tests → ✅ verify observability/operational concerns.
 
 ---
 
@@ -127,7 +126,7 @@ All entities extend `BaseEntity` (UUID **v7** primary key, assigned by Hibernate
 3. two `ledger_entries` rows (DEBIT + CREDIT),
 4. updated `balance` on one or both wallets.
 
-Migrations: `V1__init.sql` (wallets, transfers, ledger_entries) and `V2__create_idempotency_records.sql`. Flyway runs on app startup before Hibernate `validate`.
+Migrations: `V1__init.sql` (wallets, transfers, ledger_entries), `V2__create_idempotency_records.sql`, and `V3__amount_precision_two_decimals.sql` (narrows monetary columns from `NUMERIC(19,4)` to `NUMERIC(19,2)` to match the scale ≤ 2 contract). Flyway runs on app startup before Hibernate `validate`.
 
 ---
 
