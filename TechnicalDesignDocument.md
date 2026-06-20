@@ -9,9 +9,9 @@
 | | |
 |---|---|
 | **Stack** | Java 21, Spring Boot 3.3.4, Spring Data JPA / Hibernate 6.5, PostgreSQL, Flyway |
-| **In scope** | `POST /transfers` with exactly-once semantics, double-entry ledger, balance tracking, safe concurrency |
-| **Out of scope (optional)** | balance API, transfer-history API, metrics dashboards, async workflows |
-| **Built** | Schema (Flyway `V1`, `V2`, `V3`), domain entities (`Wallet`, `Transfer`, `LedgerEntry`, `IdempotencyRecord`), base classes (`BaseEntity`, `AuditableEntity`), repository / service / controller layers, exception handling, and the full test suite (domain unit + Testcontainers integration, idempotency, concurrency) |
+| **In scope** | `POST /transfers` with exactly-once semantics, double-entry ledger, balance tracking, safe concurrency; read APIs for wallet balance and transfer history |
+| **Out of scope (optional)** | metrics dashboards, async workflows |
+| **Built** | Schema (Flyway `V1`, `V2`, `V3`), domain entities (`Wallet`, `Transfer`, `LedgerEntry`, `IdempotencyRecord`), base classes (`BaseEntity`, `AuditableEntity`), repository / service / controller layers (transfer + wallet read APIs), exception handling, and the full test suite (domain unit + Testcontainers integration, idempotency, concurrency) |
 
 **Preferred order of work** (complete): ✅ inspect contract (`ASSIGNMENT.md`) → ✅ design note (this doc) → ✅ implement code → ✅ add tests → ✅ verify observability/operational concerns.
 
@@ -101,9 +101,27 @@ Response codes:
 | `409 Conflict` | idempotency key reused with a **different** payload, **or** an identical request is still `IN_PROGRESS` (retry shortly) |
 | **replay** | duplicate of a **completed** request returns the **original** status code and body verbatim |
 
-### Optional (not required)
+### `GET /wallets/{id}` — balance
 
-`GET /wallets/{id}` (balance), `GET /transfers/{id}`, `GET /wallets/{id}/ledger`. Listed for completeness; out of scope unless time permits.
+Returns the wallet's current balance. `200 OK` with `{ walletId, balance, currency, updatedAt }`; `404` if the wallet does not exist; `400` if the id is not a valid UUID.
+
+```json
+{ "walletId": "018f...", "balance": 250.75, "currency": "INR", "updatedAt": "2026-06-20T10:00:00Z" }
+```
+
+### `GET /wallets/{id}/transfers` — transfer history (paginated)
+
+Returns a **paginated** page of the transfers the wallet participated in (as source or destination), **newest first**. Accepts the standard Spring Data paging params (`page`, `size`, `sort`; defaults `page=0`, `size=20`, `sort=createdAt,id,desc`). Each item is the same `TransferResponse` shape used by `POST /transfers`, wrapped in a stable `PageResponse` envelope (`content`, `page`, `size`, `totalElements`, `totalPages`, `first`, `last`). `200 OK` with an empty `content` when there is no history; `404` if the wallet does not exist; `400` if the id is not a valid UUID.
+
+```json
+{ "content": [ /* TransferResponse… */ ], "page": 0, "size": 20, "totalElements": 1, "totalPages": 1, "first": true, "last": true }
+```
+
+Both reads run in a `readOnly` transaction and are served by primary-key / FK indexes (no scans). The explicit `PageResponse` is used instead of Spring Data's `Page` to keep the JSON contract version-stable.
+
+### Optional (not built)
+
+`GET /transfers/{id}` (single transfer) and `GET /wallets/{id}/ledger` (raw ledger entries) — natural extensions, omitted as the balance + history reads already cover the optional scope.
 
 ---
 
@@ -208,6 +226,7 @@ Behavioral, TDD (Red → Blue → Green). PostgreSQL-backed integration tests vi
 - **Idempotency (integration)**: same key + same payload → single transfer, replayed response; same key + different payload → `409`; verifies **no duplicate side effects**.
 - **Failure scenarios**: insufficient funds → `FAILED` + `422`, and a retry replays the `422`; unknown wallet → `404`; same-wallet / bad amount → `400`.
 - **Concurrency**: N parallel transfers debiting one wallet → no overdraft, final balance exact, no lost updates; concurrent duplicates of the same key → exactly one transfer created.
+- **Read APIs (integration)**: `GET /wallets/{id}` returns the balance and reflects it after a transfer; `GET /wallets/{id}/transfers` returns every transfer involving the wallet, newest first, and paginates correctly (`page`/`size` slice + `totalElements`/`totalPages`/`first`/`last`); unknown wallet → `404`; malformed id → `400`.
 
 Coverage targets the **required behaviors** (transfer execution, idempotency, ledger correctness, failure handling, concurrency safety), not implementation details.
 

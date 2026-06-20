@@ -25,6 +25,7 @@ A reliable, transactional wallet-to-wallet transfer service that guarantees **ex
 ## Key Features
 
 - **`POST /transfers`** — move funds between two wallets with exactly-once semantics.
+- **Read APIs** — `GET /wallets/{id}` (balance) and `GET /wallets/{id}/transfers` (paginated transfer history).
 - **Idempotency** — a dedicated, durable registry returns the original result for any retry and prevents duplicate side effects.
 - **Double-entry ledger** — every transfer writes exactly one DEBIT and one CREDIT; the ledger always balances.
 - **Concurrency safety** — pessimistic row locks with deterministic ordering prevent double-spend and deadlocks.
@@ -47,8 +48,8 @@ HTTP ─▶ Controller ─▶ Service (orchestration + idempotency) ─▶ Proce
 
 | Layer | Responsibility | Key types |
 |---|---|---|
-| **Controller** | Transport only: validate, map outcome → HTTP status, delegate | `TransferController` |
-| **Service** | Orchestration + idempotency; **not** transactional | `TransferServiceImpl` |
+| **Controller** | Transport only: validate, map outcome → HTTP status, delegate | `TransferController`, `WalletController` |
+| **Service** | Orchestration + idempotency; **not** transactional | `TransferServiceImpl`, `WalletServiceImpl` |
 | **Processor** | The atomic unit of work — one `@Transactional` boundary | `TransferProcessor` |
 | **Repository** | Persistence only (incl. the pessimistic-lock query) | `WalletRepository`, … |
 | **Domain** | Entities owning their state transitions and invariants | `Wallet`, `Transfer`, … |
@@ -65,14 +66,17 @@ src/
 │   ├── java/com/rajat/wallet/
 │   │   ├── WalletTransferApplication.java        # Spring Boot entry point (@EnableJpaAuditing)
 │   │   ├── controller/
-│   │   │   └── TransferController.java            # POST /transfers — thin transport layer
+│   │   │   ├── TransferController.java            # POST /transfers — thin transport layer
+│   │   │   └── WalletController.java              # GET /wallets/{id} + /{id}/transfers (read APIs)
 │   │   ├── service/
-│   │   │   ├── TransferService.java              # service interface
+│   │   │   ├── TransferService.java              # transfer service interface
 │   │   │   ├── TransferServiceImpl.java          # idempotency-aware orchestrator (non-transactional)
-│   │   │   └── TransferProcessor.java            # the single @Transactional unit of work
+│   │   │   ├── TransferProcessor.java            # the single @Transactional unit of work
+│   │   │   ├── WalletService.java                # read-side interface
+│   │   │   └── WalletServiceImpl.java            # balance + history (readOnly tx)
 │   │   ├── repository/
 │   │   │   ├── WalletRepository.java             # findAllForUpdate (SELECT … FOR UPDATE)
-│   │   │   ├── TransferRepository.java
+│   │   │   ├── TransferRepository.java           # findByWalletId (paginated history)
 │   │   │   ├── LedgerEntryRepository.java
 │   │   │   └── IdempotencyRecordRepository.java  # findByIdempotencyKey
 │   │   ├── domain/
@@ -91,6 +95,8 @@ src/
 │   │   ├── dto/
 │   │   │   ├── CreateTransferRequest.java        # inbound contract + bean validation
 │   │   │   ├── TransferResponse.java             # outbound contract (builder)
+│   │   │   ├── WalletResponse.java               # balance read contract
+│   │   │   ├── PageResponse.java                 # stable pagination envelope
 │   │   │   └── ErrorResponse.java                # uniform error body
 │   │   └── exception/
 │   │       ├── WalletNotFoundException.java      # → 404
@@ -111,7 +117,8 @@ src/
     │   └── AbstractIntegrationTest.java           # Testcontainers base
     ├── TransferApiIT.java                          # execution, ledger, validation
     ├── IdempotencyIT.java                          # replay + conflict
-    └── ConcurrencyIT.java                          # no double-spend, duplicate key
+    ├── ConcurrencyIT.java                          # no double-spend, duplicate key
+    └── WalletApiIT.java                            # balance + transfer-history reads
 
 scripts/seed-wallets.sql                            # 10 demo wallets (manual, not a migration)
 docker-compose.yml                                  # local PostgreSQL
@@ -244,6 +251,79 @@ A business failure is a first-class outcome: the transfer is persisted as `FAILE
 | Duplicate of a **completed** request (same key + same payload) | replay | original status + body, verbatim |
 | Unexpected server error | `500 Internal Server Error` | `ErrorResponse` |
 
+### `GET /wallets/{id}`
+
+Returns a wallet's current balance.
+
+**`200 OK`**
+
+```json
+{
+  "walletId": "00000000-0000-0000-0000-000000000001",
+  "balance": 250.75,
+  "currency": "INR",
+  "updatedAt": "2026-06-20T10:00:00Z"
+}
+```
+
+```bash
+curl -s localhost:8080/wallets/00000000-0000-0000-0000-000000000001
+```
+
+| Scenario | Code |
+|---|---|
+| Wallet found | `200 OK` |
+| Wallet does not exist | `404 Not Found` |
+| Malformed id (not a UUID) | `400 Bad Request` |
+
+### `GET /wallets/{id}/transfers`
+
+Returns a **paginated** list of the transfers the wallet took part in (as source **or** destination), **newest first** — each item is the same `TransferResponse` shape returned by `POST /transfers`.
+
+**Query parameters**
+
+| Param | Default | Meaning |
+|---|---|---|
+| `page` | `0` | zero-based page index |
+| `size` | `20` | page size |
+| `sort` | `createdAt,id,desc` | sort fields + direction (Spring Data syntax) |
+
+**`200 OK`**
+
+```json
+{
+  "content": [
+    {
+      "transferId": "018f...",
+      "fromWalletId": "00000000-0000-0000-0000-000000000001",
+      "toWalletId":   "00000000-0000-0000-0000-000000000002",
+      "amount": 250.50,
+      "status": "PROCESSED",
+      "failureReason": null,
+      "createdAt": "2026-06-20T10:00:00Z"
+    }
+  ],
+  "page": 0,
+  "size": 20,
+  "totalElements": 1,
+  "totalPages": 1,
+  "first": true,
+  "last": true
+}
+```
+
+```bash
+curl -s "localhost:8080/wallets/00000000-0000-0000-0000-000000000001/transfers?page=0&size=20"
+```
+
+`content` is an empty array when the wallet has no history. The response uses an explicit `PageResponse` envelope rather than Spring Data's `Page` so the JSON shape is stable across versions.
+
+| Scenario | Code |
+|---|---|
+| Wallet found (page, `content` possibly empty) | `200 OK` |
+| Wallet does not exist | `404 Not Found` |
+| Malformed id (not a UUID) | `400 Bad Request` |
+
 ---
 
 ## Error Handling
@@ -266,6 +346,7 @@ All non-2xx responses share one shape, produced by `GlobalExceptionHandler` (`@R
 |---|---|
 | `MethodArgumentNotValidException` (bean validation) | `400` |
 | `HttpMessageNotReadableException` (malformed body) | `400` |
+| `MethodArgumentTypeMismatchException` (malformed path var, e.g. bad UUID) | `400` |
 | `IllegalArgumentException` | `400` |
 | `WalletNotFoundException` | `404` |
 | `IdempotencyConflictException` | `409` |
@@ -330,10 +411,29 @@ Behavioral tests (TDD: Red → Blue → Green). Integration tests run against a 
 - `TransferApiIT` — happy path (`201`, balances moved, **exactly two ledger entries** with correct `balance_after`, ledger balances); insufficient funds → `422 FAILED`, no money moved, no ledger rows; currency mismatch → `422 FAILED`; unknown wallet → `404`, nothing persisted; validation cases → `400` (blank key, non-positive amount, scale > 2, self-transfer, malformed JSON).
 - `IdempotencyIT` — same key + same payload replays the original result and applies the transfer **once**; same key + different payload → `409`.
 - `ConcurrencyIT` — 10 simultaneous debits of a 100-balance wallet: **exactly 5 succeed, 5 fail, balance lands at 0.00, never negative**, ledger stays consistent; 6 concurrent requests with the **same** key apply the transfer **exactly once** (one shared transfer id; every caller gets `201` or `409`).
+- `WalletApiIT` — `GET /wallets/{id}` returns balance + currency and reflects it after a transfer; `GET /wallets/{id}/transfers` lists every transfer involving the wallet (source or destination), newest first, and excludes unrelated ones; **pagination** (`page`/`size`) returns the right slice with correct `totalElements`/`totalPages`/`first`/`last`; unknown wallet → `404`; malformed id → `400`.
 
 ```bash
 ./gradlew test     # all suites
 ```
+
+### Manual race-condition verification
+
+Beyond the automated `ConcurrencyIT`, I manually widened the race window to *watch* the locking and idempotency behaviour by eye. I temporarily inserted a `Thread.sleep(15000)` inside `TransferProcessor.executeTransfer`, **right after the idempotency key is reserved and both wallets are locked** but before the money moves. With one in-flight request frozen for 15 seconds holding its key reservation and its `FOR UPDATE` row locks, I fired a second request with `curl` during that window and observed how it behaved.
+
+> This sleep is a debugging aid only — it was **removed before submission** (a transfer must never block for 15s, and it would stall the test suite). It widens, but does not change, the real concurrency behaviour.
+
+The cases I checked, and what each one demonstrated:
+
+| Second request fired during the 15s window | What the frozen first request is holding | Observed result | Proves |
+|---|---|---|---|
+| **Same idempotency key, same payload** (a true retry) | uncommitted key reservation (flushed to the unique index) | Second request **blocks on the unique index**; once the first commits it **replays the first's result** (`201`). Exactly **one** transfer + one DEBIT/CREDIT pair. | exactly-once under a concurrent duplicate |
+| **Same idempotency key, different accounts / amount** (key reused for a different transfer) | uncommitted key reservation | Second request blocks, then after commit the `request_hash` mismatch is detected → **`409 Conflict`**. The first transfer is untouched. | one key = one logical operation; accidental reuse is rejected, not silently mis-applied |
+| **Different keys, same source wallet** (two debits of one account) | `SELECT … FOR UPDATE` lock on the source row | Second request **blocks on the row lock**; after the first commits it re-reads the *new* balance and validates against it → **no double-spend** (it succeeds only if funds still cover it, else `422 FAILED`). | pessimistic lock serializes debits on a hot wallet |
+| **Different keys, fully disjoint wallets** | nothing the second request needs | Second request **runs immediately** and finishes *before* the frozen one — no waiting. | transfers on non-overlapping wallets run fully in parallel |
+| **Opposing transfer on the same pair** (`A→B` while `B→A` is frozen) | locks on both `A` and `B` (acquired in id order) | Second request **waits** for the same rows and proceeds after commit — **no deadlock**. | deterministic lock ordering prevents deadlocks |
+
+Each case was also confirmed against the database afterwards (balances, exactly two ledger entries per processed transfer, a single `transfers` row per logical operation).
 
 ---
 
@@ -386,3 +486,6 @@ Behavioral tests (TDD: Red → Blue → Green). Integration tests run against a 
 
 9. *"Help me write up the docs — a design document with the contract, failure modes, idempotency and retry behavior, consistency guarantees and the testing strategy; a README with the stack, how to run it, the architecture, the API, the schema and the tests; and a separate implementation-details note going deeper on the design decisions, trade-offs and performance."*
 
+10. *"Now let's add the optional read endpoints, keeping the same clean layering with a WalletController and WalletService. I want a GET /wallets/{id} that returns the current balance, currency and when it was last updated, and a GET /wallets/{id}/transfers that returns the transfer history for a wallet — every transfer where it was the source or the destination, newest first. Run both as read-only transactions, return 404 if the wallet doesn't exist, and make sure a malformed UUID in the URL comes back as a 400 rather than a 500. Add Testcontainers tests for the balance, the history (including that it excludes unrelated transfers), and the 404/400 cases."*
+
+11. *"The transfer history shouldn't return everything at once — make it paginated. Use the standard page/size/sort query params, default to newest first, and add the id as a tiebreaker so paging stays deterministic when timestamps collide. Don't serialize Spring's Page object directly though — wrap it in our own response shape with content, page, size, totalElements, totalPages, first and last. Add a test that pages through the results and checks the slice and the metadata."*

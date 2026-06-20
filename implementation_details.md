@@ -50,6 +50,15 @@ All entities extend `BaseEntity` (UUID v7 id) → `AuditableEntity` (`created_at
 - `Transfer.markProcessed()` / `markFailed()` call a private `requirePending()` guard, so the state machine only ever moves *out of* `PENDING` once.
 - `LedgerEntry` is immutable (getters only, `@AllArgsConstructor`) — it models an append-only fact.
 
+### 1.4 Read side (query APIs)
+
+Two read-only endpoints sit alongside the write path, served by a separate `WalletService` / `WalletController` so the command and query sides stay cleanly separated:
+
+- **`GET /wallets/{id}`** — returns the **materialized** balance directly (`findById`), so a balance read is O(1) and never aggregates the ledger. The `updatedAt` audit column doubles as a freshness signal (timestamp of the last balance-changing transaction).
+- **`GET /wallets/{id}/transfers`** — **paginated** transfer history for a wallet (source *or* destination) via `findByWalletId(walletId, Pageable)`. Paging/sorting come from a `Pageable` (default `size=20`, `sort=createdAt,id desc`); the `id` tiebreaker — a time-ordered UUID v7 — keeps paging deterministic when `createdAt` values collide. It first checks `existsById` so an unknown wallet is a clean `404` rather than an empty page. The result is mapped to an explicit `PageResponse` envelope rather than returning Spring Data's `Page` directly, whose JSON shape is version-unstable.
+
+Both run in a `@Transactional(readOnly = true)` boundary, mapping entities to DTOs while the session is open (`open-in-view` is disabled). A malformed UUID in the path is mapped to `400` (`MethodArgumentTypeMismatchException`) rather than leaking a `500`.
+
 ---
 
 ## 2. Design Decisions & Trade-offs
