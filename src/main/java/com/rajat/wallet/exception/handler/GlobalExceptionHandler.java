@@ -1,6 +1,7 @@
 package com.rajat.wallet.exception.handler;
 
 import com.rajat.wallet.dto.ErrorResponse;
+import com.rajat.wallet.exception.DataIntegrityViolations;
 import com.rajat.wallet.exception.IdempotencyConflictException;
 import com.rajat.wallet.exception.WalletNotFoundException;
 import java.util.LinkedHashMap;
@@ -59,12 +60,19 @@ public class GlobalExceptionHandler {
   }
 
   /**
-   * A concurrent first request with the same idempotency key loses the unique-index race. The
-   * transaction rolls back (no double-apply); the client should retry and will get the replay.
+   * Only the {@code idempotency_key} unique violation is a retryable {@code 409}: a concurrent
+   * first request lost the unique-index race (its transaction rolled back, so no double-apply) and
+   * a retry will get the replay. Any other integrity violation (FK, CHECK, NOT NULL) is unexpected
+   * — it signals a bug or bad data, not a duplicate — so it is logged and surfaced as {@code 500}
+   * rather than misdiagnosed as a retryable conflict.
    */
   @ExceptionHandler(DataIntegrityViolationException.class)
   public ResponseEntity<ErrorResponse> handleDataIntegrity(DataIntegrityViolationException ex) {
-    return build(HttpStatus.CONFLICT, "Concurrent duplicate request; please retry", null);
+    if (DataIntegrityViolations.isIdempotencyKeyViolation(ex)) {
+      return build(HttpStatus.CONFLICT, "Concurrent duplicate request; please retry", null);
+    }
+    log.error("Unexpected data integrity violation", ex);
+    return build(HttpStatus.INTERNAL_SERVER_ERROR, "Unexpected error", null);
   }
 
   /** Defensive guard for stray illegal arguments not caught by bean validation -> 400. */

@@ -7,17 +7,17 @@ import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
-import lombok.Setter;
 
 /**
  * A wallet holding a materialized {@code balance}. The balance is updated in the same transaction
  * as the ledger entries it derives from; the invariant {@code balance == SUM(credits) -
- * SUM(debits)} always holds for a committed transaction.
+ * SUM(debits)} always holds for a committed transaction. The entity exposes <b>getters only</b> —
+ * no {@code @Setter} — so the balance can only change through {@link #debit(BigDecimal)} / {@link
+ * #credit(BigDecimal)}, keeping the overdraft guard impossible to bypass.
  */
 @Entity
 @Table(name = "wallets")
 @Getter
-@Setter
 @NoArgsConstructor
 public class Wallet extends AuditableEntity {
 

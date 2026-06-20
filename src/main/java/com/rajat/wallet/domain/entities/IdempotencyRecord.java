@@ -10,7 +10,6 @@ import jakarta.persistence.Table;
 import java.util.UUID;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
-import lombok.Setter;
 
 /**
  * Durable idempotency registry, deliberately decoupled from any single operation so the same
@@ -19,11 +18,13 @@ import lombok.Setter;
  * result so a duplicate request is replayed verbatim without re-executing side effects. The {@code
  * requestHash} lets the service reject a key replayed with a different payload, and the {@code
  * status} lifecycle lets a concurrent duplicate detect an in-flight request.
+ *
+ * <p>Getters only — no {@code @Setter} — so the record can only move through its lifecycle via
+ * {@link #inProgress(String, String)} and {@link #complete(UUID, int, String)}.
  */
 @Entity
 @Table(name = "idempotency_records")
 @Getter
-@Setter
 @NoArgsConstructor
 public class IdempotencyRecord extends AuditableEntity {
 
@@ -47,7 +48,10 @@ public class IdempotencyRecord extends AuditableEntity {
   @Column(name = "response_status")
   private Integer responseStatus;
 
-  @Column(name = "response_body")
+  // Unbounded cached payload (a serialized JSON response), mapped to the schema's TEXT column
+  // rather than the default varchar(255) so it can never be truncated or surprise schema
+  // validation.
+  @Column(name = "response_body", columnDefinition = "text")
   private String responseBody;
 
   /** Creates an in-flight record for a first-seen request. */

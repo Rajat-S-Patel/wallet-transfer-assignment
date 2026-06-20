@@ -6,6 +6,7 @@ import com.rajat.wallet.domain.entities.IdempotencyRecord;
 import com.rajat.wallet.domain.enums.IdempotencyStatus;
 import com.rajat.wallet.dto.CreateTransferRequest;
 import com.rajat.wallet.dto.TransferResponse;
+import com.rajat.wallet.exception.DataIntegrityViolations;
 import com.rajat.wallet.exception.IdempotencyConflictException;
 import com.rajat.wallet.repository.IdempotencyRecordRepository;
 import java.nio.charset.StandardCharsets;
@@ -53,13 +54,19 @@ public class TransferServiceImpl implements TransferService {
 
     try {
       return transferProcessor.process(request, requestHash);
-    } catch (DataIntegrityViolationException race) {
+    } catch (DataIntegrityViolationException ex) {
+      // Only the idempotency-key unique violation is our replayable race. Any other integrity
+      // violation (FK, CHECK, NOT NULL) is a genuine failure — rethrow it so it surfaces as a 500
+      // rather than being misread as a duplicate and turned into a 409.
+      if (!DataIntegrityViolations.isIdempotencyKeyViolation(ex)) {
+        throw ex;
+      }
       // A concurrent first request won the unique-key race and has now committed. Replay it.
       log.info("Lost idempotency-key race for {}; replaying winner", request.idempotencyKey());
       IdempotencyRecord winner =
           idempotencyRepository
               .findByIdempotencyKey(request.idempotencyKey())
-              .orElseThrow(() -> race);
+              .orElseThrow(() -> ex);
       return replayOrConflict(winner, requestHash);
     }
   }

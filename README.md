@@ -101,6 +101,7 @@ src/
 │   │   └── exception/
 │   │       ├── WalletNotFoundException.java      # → 404
 │   │       ├── IdempotencyConflictException.java # → 409
+│   │       ├── DataIntegrityViolations.java      # classifies idempotency-key vs other violations
 │   │       └── handler/
 │   │           └── GlobalExceptionHandler.java   # @RestControllerAdvice
 │   └── resources/
@@ -113,6 +114,10 @@ src/
     ├── domain/entities/
     │   ├── WalletTest.java                        # balance invariants (unit)
     │   └── TransferTest.java                      # state machine (unit)
+    ├── exception/handler/
+    │   └── GlobalExceptionHandlerTest.java        # 409 vs 500 violation mapping (unit)
+    ├── service/
+    │   └── TransferServiceImplTest.java           # replay vs rethrow on violations (unit)
     ├── support/
     │   └── AbstractIntegrationTest.java           # Testcontainers base
     ├── TransferApiIT.java                          # execution, ledger, validation
@@ -350,7 +355,8 @@ All non-2xx responses share one shape, produced by `GlobalExceptionHandler` (`@R
 | `IllegalArgumentException` | `400` |
 | `WalletNotFoundException` | `404` |
 | `IdempotencyConflictException` | `409` |
-| `DataIntegrityViolationException` (race fallback) | `409` |
+| `DataIntegrityViolationException` — **idempotency-key** unique violation (race fallback) | `409` |
+| `DataIntegrityViolationException` — any other constraint (FK/CHECK/NOT NULL) | `500` (logged) |
 | any other `Exception` | `500` (logged) |
 
 The controller maps a recorded business `FAILED` outcome to `422`, and `PROCESSED` to `201` — so a replayed result returns the same status code as the original.
@@ -372,7 +378,7 @@ A **dedicated, operation-agnostic `idempotency_records` table** (rather than a u
 
 - Both wallets are loaded with `SELECT … FOR UPDATE` (`@Lock(PESSIMISTIC_WRITE)`), **ordered by id**, so two opposing transfers between the same pair always acquire locks in the same sequence — **no deadlock**.
 - Funds are checked and the balance written **under the same lock**, closing the read-then-write window — **no double-spend**. The DB `CHECK (balance >= 0)` is a backstop.
-- **Concurrent duplicate keys**: the `saveAndFlush` on the unique `idempotency_key` makes the second writer **block** on the index until the winner commits, then fail with a unique violation. The non-transactional orchestrator catches it and replays the committed winner — so the side effect happens **exactly once**.
+- **Concurrent duplicate keys**: the `saveAndFlush` on the unique `idempotency_key` makes the second writer **block** on the index until the winner commits, then fail with a unique violation. The non-transactional orchestrator catches it and replays the committed winner — so the side effect happens **exactly once**. Only the `idempotency_records_key_unique` violation is treated as this race; any **other** integrity violation (FK/CHECK/NOT NULL) is rethrown and surfaced as a logged `500`, never misread as a retryable duplicate.
 
 ### Double-Entry Ledger
 
@@ -380,7 +386,7 @@ Every processed transfer writes **exactly two immutable `ledger_entries`**: a DE
 
 ### Clean Separation
 
-Thin controller (transport only) → orchestrating service (idempotency, no DB transaction) → transactional processor (the atomic unit) → persistence-only repositories → rich domain entities that own their own state transitions (`Transfer.markProcessed/markFailed`) and invariants (`Wallet.debit` refuses to go negative).
+Thin controller (transport only) → orchestrating service (idempotency, no DB transaction) → transactional processor (the atomic unit) → persistence-only repositories → rich domain entities that own their own state transitions (`Transfer.markProcessed/markFailed`) and invariants (`Wallet.debit` refuses to go negative). Entities expose **getters only** (no `@Setter`), so state can only change through these intention-revealing methods — there is no `setStatus`/`setBalance` escape hatch that could bypass the guards (JPA uses field access, so no setters are needed).
 
 ---
 
@@ -403,9 +409,11 @@ Thin controller (transport only) → orchestrating service (idempotency, no DB t
 
 Behavioral tests (TDD: Red → Blue → Green). Integration tests run against a **real PostgreSQL via Testcontainers**, so locking and constraints are exercised for real — no in-memory substitute.
 
-**Domain unit tests** (no Spring, no DB)
+**Unit tests** (no Spring, no DB)
 - `WalletTest` — debit reduces balance, credit increases, exact-balance debit allowed, overdraft throws and leaves the balance untouched, `hasSufficientFunds` boundary.
 - `TransferTest` — `PENDING → PROCESSED`, `PENDING → FAILED` (with reason), and the guards that make retries safe (can't re-process, can't fail-after-process, can't process-after-fail).
+- `GlobalExceptionHandlerTest` — the idempotency-key unique violation maps to `409`; any other integrity violation maps to a logged `500`.
+- `TransferServiceImplTest` — the orchestrator replays only on the idempotency-key violation and **rethrows** any other `DataIntegrityViolationException` instead of mistaking it for a duplicate.
 
 **Integration tests** (Testcontainers)
 - `TransferApiIT` — happy path (`201`, balances moved, **exactly two ledger entries** with correct `balance_after`, ledger balances); insufficient funds → `422 FAILED`, no money moved, no ledger rows; currency mismatch → `422 FAILED`; unknown wallet → `404`, nothing persisted; validation cases → `400` (blank key, non-positive amount, scale > 2, self-transfer, malformed JSON).

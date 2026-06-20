@@ -11,17 +11,17 @@ import java.math.BigDecimal;
 import java.util.UUID;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
-import lombok.Setter;
 
 /**
  * A transfer request and its lifecycle. Exactly-once request handling lives in the generic {@link
  * IdempotencyRecord} registry, not here. State transitions are guarded: a transfer may only move
- * out of {@link TransferStatus#PENDING}.
+ * out of {@link TransferStatus#PENDING}. The entity exposes <b>getters only</b> — no
+ * {@code @Setter} — so the sole way to change its status is through {@link #markProcessed()} /
+ * {@link #markFailed(String)}, which can never be bypassed.
  */
 @Entity
 @Table(name = "transfers")
 @Getter
-@Setter
 @NoArgsConstructor
 public class Transfer extends AuditableEntity {
 

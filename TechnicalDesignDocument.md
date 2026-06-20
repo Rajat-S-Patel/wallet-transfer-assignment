@@ -161,10 +161,11 @@ Migrations: `V1__init.sql` (wallets, transfers, ledger_entries), `V2__create_ide
 | Duplicate request (same key, same payload, completed) | unique key / lookup | replay cached response |
 | Duplicate request still in flight | record is `IN_PROGRESS` | `409`, client retries |
 | Key reused with different payload | `request_hash` mismatch | `409` |
-| Unique-violation race (two firsts insert same key) | DB unique constraint | loser caught, treated as duplicate |
+| Unique-violation race (two firsts insert same key) | `idempotency_records_key_unique` constraint | loser caught, treated as duplicate (replay) |
+| Other integrity violation (FK / CHECK / NOT NULL) | constraint name ≠ idempotency-key | rethrown, logged → `500` (never misread as a duplicate `409`) |
 | Process crash mid-transaction | transaction never commits | full rollback; no partial money movement |
 
-**Defense in depth:** invariants are enforced both in the domain (`Wallet.debit` throws if it would go negative; `Transfer.markProcessed/markFailed` only allow transitions out of `PENDING`) **and** at the database (`CHECK`/`UNIQUE`/`FK` constraints), so a logic bug cannot corrupt persisted state.
+**Defense in depth:** invariants are enforced both in the domain (`Wallet.debit` throws if it would go negative; `Transfer.markProcessed/markFailed` only allow transitions out of `PENDING`) **and** at the database (`CHECK`/`UNIQUE`/`FK` constraints), so a logic bug cannot corrupt persisted state. Entities expose **getters only** (no `@Setter`), so the only way to mutate state is through these guarded domain methods — there is no setter that could bypass them (JPA uses field access, so setters are unnecessary).
 
 ---
 
@@ -227,6 +228,7 @@ Behavioral, TDD (Red → Blue → Green). PostgreSQL-backed integration tests vi
 - **Failure scenarios**: insufficient funds → `FAILED` + `422`, and a retry replays the `422`; unknown wallet → `404`; same-wallet / bad amount → `400`.
 - **Concurrency**: N parallel transfers debiting one wallet → no overdraft, final balance exact, no lost updates; concurrent duplicates of the same key → exactly one transfer created.
 - **Read APIs (integration)**: `GET /wallets/{id}` returns the balance and reflects it after a transfer; `GET /wallets/{id}/transfers` returns every transfer involving the wallet, newest first, and paginates correctly (`page`/`size` slice + `totalElements`/`totalPages`/`first`/`last`); unknown wallet → `404`; malformed id → `400`.
+- **Error mapping (unit)**: the idempotency-key unique violation maps to `409` while any other integrity violation maps to a logged `500`; the orchestrator replays only on the idempotency-key violation and rethrows everything else.
 
 Coverage targets the **required behaviors** (transfer execution, idempotency, ledger correctness, failure handling, concurrency safety), not implementation details.
 

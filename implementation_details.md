@@ -50,6 +50,8 @@ All entities extend `BaseEntity` (UUID v7 id) → `AuditableEntity` (`created_at
 - `Transfer.markProcessed()` / `markFailed()` call a private `requirePending()` guard, so the state machine only ever moves *out of* `PENDING` once.
 - `LedgerEntry` is immutable (getters only, `@AllArgsConstructor`) — it models an append-only fact.
 
+**No public setters.** Entities expose `@Getter` but deliberately *not* `@Setter`. The only ways to mutate state are the intention-revealing domain methods (`debit`/`credit`, `markProcessed`/`markFailed`, `inProgress`/`complete`) — there is no `setBalance` or `setStatus` escape hatch that could bypass the overdraft guard or the `requirePending()` state-machine check. This works because JPA uses **field access** here (the `@Id` annotation sits on the field in `BaseEntity`), so Hibernate hydrates via reflection and never needs setters; the invariants stay centralized in the aggregate.
+
 ### 1.4 Read side (query APIs)
 
 Two read-only endpoints sit alongside the write path, served by a separate `WalletService` / `WalletController` so the command and query sides stay cleanly separated:
@@ -96,6 +98,8 @@ Reasons:
 3. **In-flight detection.** The `IN_PROGRESS → COMPLETED` lifecycle lets a concurrent duplicate distinguish "still running" from "done".
 
 **Trade-off:** one extra row and one extra write per request, plus a `request_hash` to compute — in exchange for true exactly-once *with* response replay.
+
+**Scoped violation handling.** Only the `idempotency_records_key_unique` violation is treated as the replayable race — `DataIntegrityViolations.isIdempotencyKeyViolation(...)` classifies it (by Hibernate constraint name, falling back to the SQL message). The orchestrator rethrows any *other* `DataIntegrityViolationException` (FK / CHECK / NOT NULL) instead of mistaking it for a duplicate, and the global handler logs it and returns `500` rather than a misleading retryable `409`. The cached `response_body` is mapped to the schema's `TEXT` column (`columnDefinition = "text"`) since a serialized response easily exceeds a default `varchar`.
 
 ### 2.4 `saveAndFlush` + unique index as the concurrency primitive
 
@@ -165,6 +169,7 @@ UUID v7 keeps PK-index inserts near-sequential, avoiding the write amplification
 | Concurrent debit, same wallet | `SELECT … FOR UPDATE` | second waits, re-checks funds — no double-spend |
 | Concurrent duplicate key | `saveAndFlush` + unique index | loser blocks → unique violation → replay winner |
 | Same key, different payload | `request_hash` mismatch | `409` |
+| Other integrity violation (FK/CHECK/NOT NULL) | constraint name ≠ `idempotency_records_key_unique` | rethrown, logged → `500` (never misread as a duplicate) |
 | Crash mid-transaction | atomic rollback | no partial state, no orphaned reservation |
 
 Invariants are enforced **in the domain** (`Wallet.debit`, `Transfer` guards) **and at the database** (`CHECK`/`UNIQUE`/`FK`), so a logic bug cannot corrupt persisted state.
