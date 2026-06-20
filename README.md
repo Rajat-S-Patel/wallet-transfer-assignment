@@ -349,3 +349,40 @@ Behavioral tests (TDD: Red → Blue → Green). Integration tests run against a 
 - Transfers are **single-currency** (no FX); a currency mismatch is a recorded `FAILED` outcome.
 - `idempotencyKey` is carried in the **request body** (per the assignment example); an `Idempotency-Key` header is an equivalent alternative.
 - No authentication/authorization layer (out of scope).
+
+---
+
+## AI Usage
+
+*(Disclosure per [`ASSIGNMENT.md`](./ASSIGNMENT.md) § AI usage.)*
+
+**Tool used:** Antigravity.
+
+**How I used it.** I worked design-first — I owned the architecture and used the AI as a pair-programmer to turn my decisions into code and tests faster:
+
+- **Made the key design decisions myself**: the layering (controller / orchestrating service / transactional processor / repositories / domain), the dedicated idempotency-registry table, pessimistic locking with deterministic lock ordering, the materialized-balance strategy, UUID v7 keys, and treating a business failure as a recorded `FAILED` outcome rather than an exception.
+- **Started from a written design note** ([`TechnicalDesignDocument.md`](./TechnicalDesignDocument.md)) and drove implementation from that spec, rather than asking the AI to invent the approach.
+- **Used it to accelerate the mechanical work**: scaffolding boilerplate, drafting entities/migrations from my schema, and generating the Testcontainers test cases for scenarios I specified.
+- **Reviewed and corrected every suggestion**, often sending it back for revision — e.g. rejected an early `@Version` optimistic-lock approach, redirected the concurrent-duplicate handling toward the non-transactional-orchestrator + transactional-processor split, and had it remove leftover debug code and fix the idempotency reservation semantics.
+- **Pressure-tested the design** by having it explain trade-offs and edge cases (concurrency races, retry safety), then validated the conclusions against the code and tests.
+
+**Representative prompts.** These are the kinds of prompts I used through the session, written the way I actually asked them — each one lays out what I wanted and how it should behave, so the AI was filling in a design I'd already thought through:
+
+1. *"Let's set up a Spring Boot 3.3 project on Java 21 with Gradle for a wallet-transfer service. I want PostgreSQL with Flyway handling the schema, plus Spring Data JPA, bean validation, and Lombok. Add a docker-compose so I can run Postgres locally, and set Hibernate to validate only — Flyway should own the schema, not Hibernate."*
+
+2. *"I want four tables. Wallets keeps a running balance and a currency. Transfers holds the from/to wallet, amount, status, and a failure reason. Ledger entries is an append-only double-entry log — wallet, transfer, type, amount, and the balance right after. And an idempotency records table for dedup. Use UUID v7 for the ids and assign them in the app. Pull the id and the created/updated timestamps into a BaseEntity and AuditableEntity that every entity extends. Also put the real guardrails in the database itself — balance can't go negative, amount has to be positive, you can't transfer to the same wallet, and only valid status/type values are allowed."*
+
+3. *"Why did you put the idempotency key on the transfers table? I'd rather have a separate idempotency table — I need to send back the cached response when a duplicate comes in, and I want to reuse the same idempotency mechanism on other endpoints later. Store the key as unique, a hash of the request so I can detect a reused key with a different body, a status that goes from in-progress to completed, the id of whatever it created, and the cached response."*
+
+4. *"Now implement the actual transfer. It should all happen in one transaction, in this order: reserve the idempotency key first and flush it so a duplicate hits the unique index early; lock both wallets with SELECT … FOR UPDATE, always in id order so we don't deadlock; create the transfer as PENDING; then check currency and funds while the rows are locked. If it fails, mark the transfer FAILED with a reason and stop. If it's fine, debit the sender, credit the receiver, write the two ledger entries with the balance-after, and mark it PROCESSED. Then save the response onto the idempotency record. Treat insufficient funds as a normal FAILED outcome that returns 422 — not an exception."*
+
+5. *"What do you mean the loser of a concurrent duplicate gets a 409 instead of a replay? I don't want that — if two identical requests race, the second one should still get back the original result. Walk me through whether committing the reservation early actually helps here, then set it up so a non-transactional service calls a transactional processor: the second request blocks on the unique key until the first commits, fails, and then we just replay the winner's cached response."*
+
+6. *"Keep the controller thin — just validate, hand off to the service, and turn the result into a status code (201 for processed, 422 for a recorded failure). Add a global exception handler that returns one consistent error body: 400 for validation, 404 for an unknown wallet, 409 for an idempotency conflict or race, and 500 for anything unexpected."*
+
+7. *"Add validation on the request — the idempotency key can't be blank, both wallet ids are required, the amount has to be positive and at most two decimal places, and reject a transfer where the source and destination are the same wallet."*
+
+8. *"Write tests, and keep them behavioral. Plain unit tests for the wallet's overdraft guard and the transfer state transitions. Then integration tests on a real Postgres with Testcontainers — the happy path with the two ledger entries and correct balances, insufficient funds and currency mismatch coming back as 422 with nothing moved, unknown wallet as 404, and the validation cases as 400. Add idempotency tests for replaying the same key and for rejecting a reused key with a different body. And concurrency tests that prove parallel debits can't overdraw and that firing the same key many times at once still only does the transfer once."*
+
+9. *"Help me write up the docs — a design document with the contract, failure modes, idempotency and retry behavior, consistency guarantees and the testing strategy; a README with the stack, how to run it, the architecture, the API, the schema and the tests; and a separate implementation-details note going deeper on the design decisions, trade-offs and performance."*
+
