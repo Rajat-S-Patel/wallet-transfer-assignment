@@ -16,9 +16,9 @@ import lombok.Setter;
  * Durable idempotency registry, deliberately decoupled from any single operation so the same
  * mechanism can guard transfers and any future endpoint. The unique {@code idempotencyKey} enforces
  * exactly-once at the API level; {@code responseStatus}/{@code responseBody} cache the original
- * result so a duplicate request is replayed verbatim without re-executing side effects. The
- * {@code requestHash} lets the service reject a key replayed with a different payload, and the
- * {@code status} lifecycle lets a concurrent duplicate detect an in-flight request.
+ * result so a duplicate request is replayed verbatim without re-executing side effects. The {@code
+ * requestHash} lets the service reject a key replayed with a different payload, and the {@code
+ * status} lifecycle lets a concurrent duplicate detect an in-flight request.
  */
 @Entity
 @Table(name = "idempotency_records")

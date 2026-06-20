@@ -9,8 +9,8 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
- * Inbound contract for {@code POST /transfers}. Field-level constraints are transport validation
- * (a malformed request can never reach the service); business rules (funds, wallet existence) are
+ * Inbound contract for {@code POST /transfers}. Field-level constraints are transport validation (a
+ * malformed request can never reach the service); business rules (funds, wallet existence) are
  * enforced downstream. Violations are mapped to HTTP 400 by {@code GlobalExceptionHandler}.
  */
 public record CreateTransferRequest(

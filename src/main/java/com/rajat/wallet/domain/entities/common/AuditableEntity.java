@@ -11,8 +11,8 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 /**
  * Adds creation/modification timestamps to {@link BaseEntity}. Managed automatically by Spring Data
- * JPA auditing (enabled via {@code @EnableJpaAuditing}): {@code createdAt} is set once on insert and
- * {@code updatedAt} on every flush, so entities never assign them by hand.
+ * JPA auditing (enabled via {@code @EnableJpaAuditing}): {@code createdAt} is set once on insert
+ * and {@code updatedAt} on every flush, so entities never assign them by hand.
  */
 @MappedSuperclass
 @EntityListeners(AuditingEntityListener.class)

@@ -117,7 +117,9 @@ public class TransferProcessor {
     return TransferResponse.from(transfer);
   }
 
-  /** Business validation under the wallet locks. Returns a failure reason, or {@code null} if ok. */
+  /**
+   * Business validation under the wallet locks. Returns a failure reason, or {@code null} if ok.
+   */
   private String validate(Wallet from, Wallet to, BigDecimal amount) {
     if (!from.getCurrency().equals(to.getCurrency())) {
       return "Currency mismatch: " + from.getCurrency() + " -> " + to.getCurrency();

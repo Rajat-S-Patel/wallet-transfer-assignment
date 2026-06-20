@@ -9,15 +9,14 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.util.UUID;
-
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * A transfer request and its lifecycle. Exactly-once request handling lives in the generic
- * {@link IdempotencyRecord} registry, not here. State transitions are guarded: a transfer may only
- * move out of {@link TransferStatus#PENDING}.
+ * A transfer request and its lifecycle. Exactly-once request handling lives in the generic {@link
+ * IdempotencyRecord} registry, not here. State transitions are guarded: a transfer may only move
+ * out of {@link TransferStatus#PENDING}.
  */
 @Entity
 @Table(name = "transfers")
