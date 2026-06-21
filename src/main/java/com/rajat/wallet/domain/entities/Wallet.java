@@ -21,7 +21,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class Wallet extends AuditableEntity {
 
-  @Column(nullable = false)
+  @Column(nullable = false, precision = 19, scale = 2)
   private BigDecimal balance = BigDecimal.ZERO;
 
   @Column(nullable = false)

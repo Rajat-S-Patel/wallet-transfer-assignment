@@ -173,7 +173,7 @@ Migrations: `V1__init.sql` (wallets, transfers, ledger_entries), `V2__create_ide
 
 Idempotency is handled by a **dedicated, operation-agnostic `idempotency_records` table** rather than a unique constraint on `transfers`, so the same mechanism can guard future endpoints and can **replay a cached response**.
 
-Record shape: `idempotency_key` (unique), `request_hash` (fingerprint of method+path+canonical body), `status` (`IN_PROGRESS` → `COMPLETED`), `target_id` (created resource id), `response_status` + `response_body` (cached response).
+Record shape: `idempotency_key` (unique), `request_hash` (a SHA-256 fingerprint of the canonical request fields — `fromWalletId|toWalletId|amount`, with the amount's trailing zeros stripped so `100` and `100.00` hash alike), `status` (`IN_PROGRESS` → `COMPLETED`), `target_id` (created resource id), `response_status` + `response_body` (cached response).
 
 Algorithm (inside the transfer transaction):
 

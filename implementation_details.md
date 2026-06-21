@@ -19,7 +19,7 @@ TransferServiceImpl          NOT @Transactional — the orchestrator
   │  1. compute request_hash
   │  2. fast path: findByIdempotencyKey → if present, replay or 409
   │  3. else delegate to the processor
-  │  4. on DataIntegrityViolationException (lost the unique-key race): re-read winner and replay
+  │  4. on idempotency-key unique violation: re-read winner and replay (other violations rethrown)
   ▼
 TransferProcessor.process()  @Transactional — ONE atomic unit of work
   │  1. saveAndFlush(IdempotencyRecord.inProgress)   ← reserves the key, collides early
@@ -76,6 +76,8 @@ Both run in a `@Transactional(readOnly = true)` boundary, mapping entities to DT
 | Correctness | invariant must be maintained in-tx | always correct by construction |
 
 **Trade-off:** we accept the responsibility of keeping `balance == SUM(credits) − SUM(debits)` consistent (done by always writing both inside one transaction, under the wallet lock) in exchange for cheap reads. `ledger_entries.balance_after` snapshots the balance per entry, so the materialized value is always auditable/reconstructable against the ledger.
+
+Every monetary column is `NUMERIC(19,2)` in Flyway **and** mapped explicitly on the entity (`@Column(precision = 19, scale = 2)` on `wallets.balance`, `transfers.amount`, `ledger_entries.amount` / `balance_after`). Pinning precision/scale in code keeps `ddl-auto: validate` robust across Hibernate/dialect versions (it doesn't fall back to a dialect default) and documents the intended money scale right next to the field — consistent with the `@Digits(fraction = 2)` request validation.
 
 ### 2.2 Pessimistic locking vs. optimistic vs. serializable
 

@@ -35,9 +35,9 @@ public class LedgerEntry extends AuditableEntity {
   @Column(nullable = false, updatable = false)
   private EntryType type;
 
-  @Column(nullable = false, updatable = false)
+  @Column(nullable = false, updatable = false, precision = 19, scale = 2)
   private BigDecimal amount;
 
-  @Column(name = "balance_after", nullable = false, updatable = false)
+  @Column(name = "balance_after", nullable = false, updatable = false, precision = 19, scale = 2)
   private BigDecimal balanceAfter;
 }

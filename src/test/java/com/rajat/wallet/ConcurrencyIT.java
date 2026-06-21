@@ -102,7 +102,11 @@ class ConcurrencyIT extends AbstractIntegrationTest {
                   return work.call();
                 }));
       }
-      ready.await(10, TimeUnit.SECONDS); // all threads parked at the gate
+      // Fail loudly if the workers never all reach the gate — otherwise the test could silently
+      // stop being concurrent (and stop validating what it claims) while still passing.
+      assertThat(ready.await(10, TimeUnit.SECONDS))
+          .as("all %d worker threads reached the start gate", count)
+          .isTrue();
       start.countDown(); // release them together
 
       List<T> results = new ArrayList<>();

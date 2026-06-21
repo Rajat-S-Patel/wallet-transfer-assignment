@@ -419,7 +419,7 @@ Behavioral tests (TDD: Red → Blue → Green). Integration tests run against a 
 **Integration tests** (Testcontainers)
 - `TransferApiIT` — happy path (`201`, balances moved, **exactly two ledger entries** with correct `balance_after`, ledger balances); insufficient funds → `422 FAILED`, no money moved, no ledger rows; currency mismatch → `422 FAILED`; unknown wallet → `404`, nothing persisted; validation cases → `400` (blank key, non-positive amount, scale > 2, self-transfer, malformed JSON).
 - `IdempotencyIT` — same key + same payload replays the original result and applies the transfer **once**; same key + different payload → `409`.
-- `ConcurrencyIT` — 10 simultaneous debits of a 100-balance wallet: **exactly 5 succeed, 5 fail, balance lands at 0.00, never negative**, ledger stays consistent; 6 concurrent requests with the **same** key apply the transfer **exactly once** (one shared transfer id; every caller gets `201` or `409`).
+- `ConcurrencyIT` — 10 simultaneous debits of a 100-balance wallet: **exactly 5 succeed, 5 fail, balance lands at 0.00, never negative**, ledger stays consistent; 6 concurrent requests with the **same** key apply the transfer **exactly once** — every caller gets `201` with one shared transfer id (duplicates block on the unique index, then replay; no fast `409`).
 - `WalletApiIT` — `GET /wallets/{id}` returns balance + currency and reflects it after a transfer; `GET /wallets/{id}/transfers` lists every transfer involving the wallet (source or destination), newest first, and excludes unrelated ones; **pagination** (`page`/`size`) returns the right slice with correct `totalElements`/`totalPages`/`first`/`last`; unknown wallet → `404`; malformed id → `400`.
 
 ```bash

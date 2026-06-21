@@ -31,7 +31,7 @@ public class Transfer extends AuditableEntity {
   @Column(name = "to_wallet_id", nullable = false, updatable = false)
   private UUID toWalletId;
 
-  @Column(nullable = false, updatable = false)
+  @Column(nullable = false, updatable = false, precision = 19, scale = 2)
   private BigDecimal amount;
 
   @Enumerated(EnumType.STRING)
